@@ -72,21 +72,26 @@ int main(){
 
     const unsigned int block_size = 3;
     const unsigned int num_blocks = colIndices.size();
-    const unsigned int work_group_size = 32;
+    const unsigned int work_group_size = 1024;
     const unsigned int num_work_groups = ceilDivision(num_blocks, work_group_size);
     const unsigned int total_work_items = num_work_groups * work_group_size;
     const unsigned int lmem_per_work_group = sizeof(double) * work_group_size;
 
-    cl::Event event = (*sat_block_frobenius_k)(cl::EnqueueArgs(*queue, cl::NDRange(total_work_items), cl::NDRange(num_work_groups)),
-                                               d_nnzValues, d_result, block_size, num_blocks, cl::Local(lmem_per_work_group));
+    try{
+        cl::Event event = (*sat_block_frobenius_k)(cl::EnqueueArgs(*queue, cl::NDRange(total_work_items), cl::NDRange(num_work_groups)),
+                                                d_nnzValues, d_result, block_size, num_blocks, cl::Local(lmem_per_work_group));
 
-    cout << "Kernel executed succesfully!!!" << endl;
+        cout << "Kernel executed succesfully!!!" << endl;
+    } catch (const cl::Error& error) {
+        cout << "OpenCL Error: " << error.what() << "(" << error.err() << ")" << endl;
+        cout << getErrorString(error.err()) << endl;
+    }
 
     queue->enqueueReadBuffer(d_result, CL_TRUE, 0, sizeof(double) * result.size(), result.data());
 
     cout << "Data succesfully read from device!" << endl;
    
-    for(double r: result) cout << r << endl;
+    //for(double r: result) cout << r << endl;
 
     /*
     string v_opath = fpath + "v_-opencl.txt";
