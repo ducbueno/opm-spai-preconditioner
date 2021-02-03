@@ -37,6 +37,10 @@ int main(){
     context.reset(new cl::Context(CL_DEVICE_TYPE_GPU, properties));
 
     vector<cl::Device> devices = context->getInfo<CL_CONTEXT_DEVICES>();
+    cl_ulong size;
+    cl_device_id tmp_id = devices[deviceID]();
+    clGetDeviceInfo(tmp_id, CL_DEVICE_MAX_WORK_GROUP_SIZE, sizeof(cl_ulong), &size, 0);
+    cout << "CL_DEVICE_MAX_WORK_GROUP_SIZE  : " << size << endl;
 
     cout << "Platform, context and device set succesfully!" << endl;
 
@@ -72,13 +76,13 @@ int main(){
 
     const unsigned int block_size = 3;
     const unsigned int num_blocks = colIndices.size();
-    const unsigned int work_group_size = 1024;
+    const unsigned int work_group_size = 256;
     const unsigned int num_work_groups = ceilDivision(num_blocks, work_group_size);
     const unsigned int total_work_items = num_work_groups * work_group_size;
     const unsigned int lmem_per_work_group = sizeof(double) * work_group_size;
 
     try{
-        cl::Event event = (*sat_block_frobenius_k)(cl::EnqueueArgs(*queue, cl::NDRange(total_work_items), cl::NDRange(num_work_groups)),
+        cl::Event event = (*sat_block_frobenius_k)(cl::EnqueueArgs(*queue, cl::NDRange(total_work_items), cl::NDRange(work_group_size)),
                                                 d_nnzValues, d_result, block_size, num_blocks, cl::Local(lmem_per_work_group));
 
         cout << "Kernel executed succesfully!!!" << endl;
