@@ -54,28 +54,27 @@ __kernel void sat_block_frobenius(
     const unsigned int num_blocks,
     __local double *tmp)
 {
-    const unsigned int bsize = get_local_size(0);
-    const unsigned int idx_b = get_global_id(0) / bsize;
     const unsigned int idx_t = get_local_id(0);
     const unsigned int bs = block_size;
     const unsigned int sat_bs = 2;
-    const unsigned int blocks_per_work_group = bsize / (sat_bs*sat_bs);
     const unsigned int c = (idx_t / sat_bs) % sat_bs + 1;
     const unsigned int r = idx_t % sat_bs + 1;
-    unsigned int block = idx_b * blocks_per_work_group + idx_t / (sat_bs*sat_bs);
+    unsigned int block = get_global_id(0) / (sat_bs*sat_bs);
 
     if(block < num_blocks){
         double A_elem = vals[block*bs*bs + c + r*bs];
         tmp[idx_t] = A_elem * A_elem;
-        barrier(CLK_LOCAL_MEM_FENCE);
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
 
-        for(unsigned int offset = 3; offset > 0; offset--){
-            if (idx_t % 4 == 0){
-                tmp[idx_t] += tmp[idx_t + offset];
-            }
-            barrier(CLK_LOCAL_MEM_FENCE);
+    for(unsigned int offset = 3; offset > 0; offset--){
+        if (idx_t % 4 == 0){
+            tmp[idx_t] += tmp[idx_t + offset];
         }
+        barrier(CLK_LOCAL_MEM_FENCE);
+    }
 
+    if(block < num_blocks){
         if(idx_t % 4 == 0){
             result[block] = tmp[idx_t];
         }

@@ -59,24 +59,30 @@ int main(){
         //cl_device_id tmp_id = devices[deviceID]();
         //clGetDeviceInfo(tmp_id, CL_DEVICE_MAX_WORK_GROUP_SIZE, sizeof(cl_ulong), &size, 0);
         //cout << "CL_DEVICE_MAX_WORK_GROUP_SIZE  : " << size << endl;
+        //clGetDeviceInfo(tmp_id, CL_DEVICE_MAX_COMPUTE_UNITS, sizeof(cl_ulong), &size, 0);
+        //cout << "CL_DEVICE_MAX_COMPUTE_UNITS    : " << size << endl;
 
         d_nnzValues = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(double) * nnzValues.size());
         d_result = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(double) * colIndices.size());
         queue->enqueueWriteBuffer(d_nnzValues, CL_TRUE, 0, sizeof(double) * nnzValues.size(), nnzValues.data());
 
-        sat_block_frobenius_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, const unsigned int, const unsigned int, cl::LocalSpaceArg>(cl::Kernel(program, "sat_block_frobenius")));
+        cl::Kernel kernel = cl::Kernel(program, "sat_block_frobenius");
+        sat_block_frobenius_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, const unsigned int, const unsigned int, cl::LocalSpaceArg>(kernel));
 
         const unsigned int block_size = 3;
         const unsigned int num_blocks = colIndices.size();
         const unsigned int work_group_size = 256;
         const unsigned int num_work_groups = ceilDivision(num_blocks, work_group_size);
-        const unsigned int total_work_items = num_work_groups * work_group_size;
+        const unsigned int total_work_items = 4 * num_work_groups * work_group_size;
         const unsigned int lmem_per_work_group = sizeof(double) * work_group_size;
 
         cl::Event event = (*sat_block_frobenius_k)(cl::EnqueueArgs(*queue, cl::NDRange(total_work_items), cl::NDRange(work_group_size)),
                                                 d_nnzValues, d_result, block_size, num_blocks, cl::Local(lmem_per_work_group));
 
         queue->enqueueReadBuffer(d_result, CL_TRUE, 0, sizeof(double) * result.size(), result.data());
+
+        //size_t size = kernel.getWorkGroupInfo<CL_KERNEL_WORK_GROUP_SIZE>(devices[deviceID]);
+        //cout << "CL_KERNEL_WORK_GROUP_SIZE = " << size << endl;
     }
 
     catch (const cl::Error& error) {
