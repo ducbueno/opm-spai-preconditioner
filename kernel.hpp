@@ -1,11 +1,57 @@
 #ifndef __KERNEL_H_
 #define __KERNEL_H_
 
-/*
+const char* find_max_s = R"(
+__kernel void find_max(__global const double *vals,
+                       __global const int *rowIndex,
+                       __global const int *colPtr,
+                       __global const double *maxvals,
+                       __local double *tmp,
+                       const int row_offset,
+                       const int N){
+    const unsigned int warpsize = 32;
+    const unsigned int lid = get_local_id(0);
+    const unsigned int gid = get_global_id(0);
+    const unsigned int NUM_THREADS = get_global_size(0);
+    const unsigned int num_warps_in_grid = NUM_THREADS / warpsize;
+    const unsigned int target_col = gid / row_offset;
+    const unsigned int lane = lid % row_offset;
+
+    while(target_col < N){
+        unsigned int first_row = colPtr[target_col];
+        unsigned int last_row = colPtr[target_col + 1];
+        unsigned int row = first_row + lane;
+
+        double local_max = 0;
+        for(; row < last_row; row += row_offset){
+            if(abs(vals[row]) > local_max){
+                local_max = abs(vals[row]);
+            }
+        }
+
+        tmp[lane] = local_max;
+        barrier(CLK_LOCAL_MEM_FENCE);
+
+        for(unsigned int offset = row_offset - 1; offset > 0; offset--){
+            if(tmp[lane + offset] > temp[lane]){
+                tmp[lane] = tmp[lane + offset];
+            }
+            barrier(CLK_LOCAL_MEM_FENCE);
+        }
+
+        if(lane == 0){
+            maxvals[target_col] = tmp[lane];
+        }
+
+        target_col += num_warps_in_grid;
+    }
+}
+)";
+
 const char* findJ_s = R"(
-__kernel void findJ(__global const double *valsA,
-                    __global const int *colsA,
-                    __global const int *rowptr,
+__kernel void findJ(__global const double *vals,
+                    __global const int *rowIndex,
+                    __global const int *colPtr,
                     __global const double *maxvals,
                     const int n2max,
                     const int n,
@@ -21,14 +67,19 @@ __kernel void findJ(__global const double *valsA,
     int tid = get_local_id(0)/warpSize;
 
     for(int col = warpId; col < n; col += offset){
-        int valSize = rowptr[col + 1] - rowptr[col];
-        for(int j = lane; j < valSize - 1; j++){
-            sJ[tid * n2max + j] = -1;
-            if(colsA[rowptr[col] + j] == col){
+        int colBegin = colPtr[col];
+        int colEnd = colPtr[col + 1];
+        int nnzCol = colEnd - colBegin;
+
+        for(int j = lane; j < nnzCol - 1; j++){
+            if(rowIndex[colBegin + j] == col){
                 sJ[tid * n2max + j] = col;
             }
-            else if(fabs(valsA[rowptr[col] + j]) > (1 - tau)*maxvals[col]){
-                sJ[tid * n2max + j] = colsA[rowptr[col] + j];
+            else if(abs(vals[colBegin + j]) > (1 - tau)*maxvals[col]){
+                sJ[tid * n2max + j] = rowIndex[colBegin + j];
+            }
+            else{
+                sJ[tid * n2max + j] = -1;
             }
         }
 
@@ -44,7 +95,6 @@ __kernel void findJ(__global const double *valsA,
     }
 }
 )";
-*/
 
 const char* sat_block_frobenius_s = R"(
 __kernel void sat_block_frobenius(
