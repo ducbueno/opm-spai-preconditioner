@@ -24,9 +24,5 @@ int main(int argc, char* argv[]){
     openclBackend oclBackend(verbosity, platformID, deviceID);
     oclBackend.run();
 
-    //ofstream output_file("/hdd/mysrc/spai/data/frobenius.txt");
-    //ostream_iterator<double> output_iterator(output_file, "\n");
-    //copy(result.begin(), result.end(), output_iterator);
-   
     return 0;
 }

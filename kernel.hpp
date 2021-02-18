@@ -2,19 +2,21 @@
 #define __KERNEL_H_
 
 const char* find_max_s = R"(
+#pragma OPENCL EXTENSION cl_khr_fp64 : enable
+
 __kernel void find_max(__global const double *vals,
-                       __global const int *rowIndex,
-                       __global const int *colPtr,
-                       __global const double *maxvals,
+                       __global const unsigned int *rowIndex,
+                       __global const unsigned int *colPtr,
+                       __global const unsigned int *mapping,
+                       __global double *maxvals,
                        __local double *tmp,
-                       const int row_offset,
-                       const int N){
+                       const unsigned int row_offset,
+                       const unsigned int N){
     const unsigned int warpsize = 32;
     const unsigned int lid = get_local_id(0);
     const unsigned int gid = get_global_id(0);
-    const unsigned int NUM_THREADS = get_global_size(0);
-    const unsigned int num_warps_in_grid = NUM_THREADS / warpsize;
-    const unsigned int target_col = gid / row_offset;
+    const unsigned int num_warps_in_grid = get_global_size(0) / row_offset;
+    unsigned int target_col = gid / row_offset;
     const unsigned int lane = lid % row_offset;
 
     while(target_col < N){
@@ -24,30 +26,30 @@ __kernel void find_max(__global const double *vals,
 
         double local_max = 0;
         for(; row < last_row; row += row_offset){
-            if(abs(vals[row]) > local_max){
-                local_max = abs(vals[row]);
+            if(fabs(vals[mapping[row]]) > local_max){
+                local_max = fabs(vals[mapping[row]]);
             }
         }
 
         tmp[lane] = local_max;
         barrier(CLK_LOCAL_MEM_FENCE);
 
-        for(unsigned int offset = row_offset - 1; offset > 0; offset--){
-            if(tmp[lane + offset] > temp[lane]){
-                tmp[lane] = tmp[lane + offset];
-            }
-            barrier(CLK_LOCAL_MEM_FENCE);
-        }
-
         if(lane == 0){
+            for(unsigned int offset = row_offset - 1; offset > 0; offset--){
+                if(tmp[lane + offset] > tmp[lane]){
+                    tmp[lane] = tmp[lane + offset];
+                }
+            }
             maxvals[target_col] = tmp[lane];
         }
+        barrier(CLK_LOCAL_MEM_FENCE);
 
         target_col += num_warps_in_grid;
     }
 }
 )";
 
+/*
 const char* findJ_s = R"(
 __kernel void findJ(__global const double *vals,
                     __global const int *rowIndex,
@@ -95,6 +97,7 @@ __kernel void findJ(__global const double *vals,
     }
 }
 )";
+*/
 
 const char* sat_block_frobenius_s = R"(
 __kernel void sat_block_frobenius(
