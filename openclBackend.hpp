@@ -26,8 +26,7 @@ class openclBackend{
         cl::Buffer d_rowPointers, d_mapping, d_maxvals;
 
         unique_ptr<cl::make_kernel<cl::Buffer&, cl::Buffer&, const unsigned int, const unsigned int, cl::LocalSpaceArg> > sat_block_frobenius_k;
-        unique_ptr<cl::make_kernel<cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer,
-                                   cl::LocalSpaceArg,const unsigned int, const unsigned int> > find_max_k;
+        unique_ptr<cl::make_kernel<cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer, cl::LocalSpaceArg> > find_max_k;
 
         unsigned int ceilDivision(const unsigned int A, const unsigned int B);
         void sat_block_frobenius_w(cl::Buffer in, cl::Buffer out, const unsigned int bs, const unsigned int nnzb);

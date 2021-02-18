@@ -9,43 +9,34 @@ __kernel void find_max(__global const double *vals,
                        __global const unsigned int *colPtr,
                        __global const unsigned int *mapping,
                        __global double *maxvals,
-                       __local double *tmp,
-                       const unsigned int row_offset,
-                       const unsigned int N){
-    const unsigned int warpsize = 32;
-    const unsigned int lid = get_local_id(0);
-    const unsigned int gid = get_global_id(0);
-    const unsigned int num_warps_in_grid = get_global_size(0) / row_offset;
-    unsigned int target_col = gid / row_offset;
-    const unsigned int lane = lid % row_offset;
+                       __local double *tmp){
+    const unsigned int wiId = get_local_id(0);
+    const unsigned int wgId = get_group_id(0);
+    const unsigned int wgSz = get_local_size(0);
 
-    while(target_col < N){
-        unsigned int first_row = colPtr[target_col];
-        unsigned int last_row = colPtr[target_col + 1];
-        unsigned int row = first_row + lane;
-
-        double local_max = 0;
-        for(; row < last_row; row += row_offset){
-            if(fabs(vals[mapping[row]]) > local_max){
-                local_max = fabs(vals[mapping[row]]);
-            }
+    unsigned int first_row = colPtr[wgId];
+    unsigned int last_row = colPtr[wgId + 1];
+    unsigned int row = first_row + wiId;
+  
+    //double local_max = 0;
+    double local_max = -MAXFLOAT;
+    for(; row < last_row; row += wgSz){
+        if(fabs(vals[mapping[row]]) > local_max){
+            local_max = fabs(vals[mapping[row]]);
         }
-
-        tmp[lane] = local_max;
-        barrier(CLK_LOCAL_MEM_FENCE);
-
-        if(lane == 0){
-            for(unsigned int offset = row_offset - 1; offset > 0; offset--){
-                if(tmp[lane + offset] > tmp[lane]){
-                    tmp[lane] = tmp[lane + offset];
-                }
-            }
-            maxvals[target_col] = tmp[lane];
-        }
-        barrier(CLK_LOCAL_MEM_FENCE);
-
-        target_col += num_warps_in_grid;
     }
+
+    tmp[wiId] = local_max;
+    barrier(CLK_LOCAL_MEM_FENCE);
+
+    for(unsigned int offset = wgSz/2; offset > 0; offset >>= 1){
+        if(tmp[wiId + offset] > tmp[wiId]){
+            tmp[wiId] = tmp[wiId + offset];
+        }
+        barrier(CLK_LOCAL_MEM_FENCE);
+    }
+
+    if(wiId == 0) maxvals[wgId] = tmp[0];
 }
 )";
 

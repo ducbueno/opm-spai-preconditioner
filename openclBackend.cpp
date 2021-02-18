@@ -143,13 +143,12 @@ void openclBackend::sat_block_frobenius_w(cl::Buffer in, cl::Buffer out, const u
 
 void openclBackend::find_max_w(cl::Buffer vals, cl::Buffer cind, cl::Buffer rptr, cl::Buffer map, cl::Buffer max, const unsigned int N){
     const unsigned int work_group_size = 32;
-    const unsigned int num_work_groups = ceilDivision(N, work_group_size);
+    const unsigned int num_work_groups = N;
     const unsigned int total_work_iteus = num_work_groups * work_group_size;
-    const unsigned int row_offset = 4;
-    const unsigned int lmem_per_work_group = sizeof(double) * row_offset;
+    const unsigned int lmem_per_work_group = sizeof(double) * work_group_size;
 
     cl::Event event = (*find_max_k)(cl::EnqueueArgs(*queue, cl::NDRange(total_work_iteus), cl::NDRange(work_group_size)),
-                                    vals, cind, rptr, map, max, cl::Local(lmem_per_work_group), row_offset, N);
+                                    vals, cind, rptr, map, max, cl::Local(lmem_per_work_group));
     event.wait();
 }
 
@@ -171,8 +170,7 @@ void openclBackend::initialize(){
 
         cout << "    - Setting kernels..." << endl << endl;
         sat_block_frobenius_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, const unsigned int, const unsigned int, cl::LocalSpaceArg>(cl::Kernel(program, "sat_block_frobenius")));
-        find_max_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer,
-                                             cl::LocalSpaceArg, const unsigned int, const unsigned int>(cl::Kernel(program, "find_max")));
+        find_max_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer, cl::LocalSpaceArg>(cl::Kernel(program, "find_max")));
     } catch (const cl::Error& error) {
         cout << "OpenCL Error: " << error.what() << "(" << error.err() << ")\n";
 
