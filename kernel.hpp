@@ -9,7 +9,8 @@ __kernel void find_max(__global const double *vals,
                        __global const unsigned int *colPtr,
                        __global const unsigned int *mapping,
                        __global double *maxvals,
-                       __local double *tmp){
+                       __local double *tmp)
+{
     const unsigned int wiId = get_local_id(0);
     const unsigned int wgId = get_group_id(0);
     const unsigned int wgSz = get_local_size(0);
@@ -50,7 +51,8 @@ __kernel void findJ(__global const double *vals,
                     __global const double *maxvals,
                     const unsigned int n2max,
                     const double tau,
-                    __global unsigned int *Jind){
+                    __global unsigned int *Jind)
+{
     const unsigned int wiId = get_local_id(0);
     const unsigned int wgId = get_group_id(0);
     const unsigned int wgSz = get_local_size(0);
@@ -72,6 +74,26 @@ __kernel void findJ(__global const double *vals,
                 Jind[n2max * wgId + wiId] = rowIndex[row];
                 atomic_inc((__local int *)&offDiagCount);
             }
+        }
+    }
+}
+)";
+
+const char* findI_s = R"(
+__kernel void findI(__global const unsigned int *J,
+                    __global unsigned int *I,
+                    const unsigned int nmax)
+{
+    const unsigned int wiId = get_local_id(0);
+    const unsigned int wgId = get_group_id(0);
+    const unsigned int wgSz = get_local_size(0);
+
+    if(wiId < nmax){
+        unsigned int col = wgId;
+        unsigned int row = J[nmax * col + wiId];
+
+        if(row != -1){
+            I[nmax * row + wiId] = col;
         }
     }
 }

@@ -173,8 +173,8 @@ void openclBackend::find_max_w(cl::Buffer vals, cl::Buffer cind, cl::Buffer rptr
     }
 }
 
-void openclBackend::findJ_w(cl::Buffer vals, cl::Buffer cind, cl::Buffer rptr, cl::Buffer map, cl::Buffer max, cl::Buffer jind){
-    queue->enqueueFillBuffer(jind, -1, 0, sizeof(int) * n2max * N);
+void openclBackend::findJ_w(cl::Buffer vals, cl::Buffer cind, cl::Buffer rptr, cl::Buffer map, cl::Buffer max, cl::Buffer j){
+    queue->enqueueFillBuffer(j, -1, 0, sizeof(int) * max_nspai * N);
 
     unsigned int work_group_size = 32;
     unsigned int num_work_groups = N;
@@ -182,7 +182,7 @@ void openclBackend::findJ_w(cl::Buffer vals, cl::Buffer cind, cl::Buffer rptr, c
 
     auto start = high_resolution_clock::now();
     cl::Event event = (*findJ_k)(cl::EnqueueArgs(*queue, cl::NDRange(total_work_items), cl::NDRange(work_group_size)),
-                                 vals, cind, rptr, map, max, n2max, tau, jind);
+                                 vals, cind, rptr, map, max, max_nspai, tau, j);
 
     if(verbosity >= 2){
         event.wait();
@@ -192,11 +192,31 @@ void openclBackend::findJ_w(cl::Buffer vals, cl::Buffer cind, cl::Buffer rptr, c
     }
 }
 
+void openclBackend::findI_w(cl::Buffer j, cl::Buffer i){
+    queue->enqueueFillBuffer(i, -1, 0, sizeof(int) * max_nspai * N);
+
+    unsigned int work_group_size = 32;
+    unsigned int num_work_groups = N;
+    unsigned int total_work_items = num_work_groups * work_group_size;
+
+    auto start = high_resolution_clock::now();
+    cl::Event event = (*findI_k)(cl::EnqueueArgs(*queue, cl::NDRange(total_work_items), cl::NDRange(work_group_size)),
+                                 j, i, max_nspai);
+
+    if(verbosity >= 2){
+        event.wait();
+        auto stop = high_resolution_clock::now();
+        auto duration = duration_cast<microseconds>(stop - start);
+        cout << "findI time: " << duration.count() << " us" << endl << endl;
+    }
+}
+
 void openclBackend::initialize(){
     try{
         cl::Program::Sources source(1, make_pair(sat_block_frobenius_s, strlen(sat_block_frobenius_s)));
         source.emplace_back(make_pair(find_max_s, strlen(find_max_s)));
         source.emplace_back(make_pair(findJ_s, strlen(findJ_s)));
+        source.emplace_back(make_pair(findI_s, strlen(findI_s)));
         program = cl::Program(*context, source);
         program.build(devices);
 
@@ -206,11 +226,13 @@ void openclBackend::initialize(){
         d_mapping = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(int) * nblocks);
         d_satFrobenius = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(double) * nblocks);
         d_maxvals = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(double) * N);
-        d_Jind = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(int) * n2max * N);
+        d_J = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(int) * max_nspai * N);
+        d_I = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(int) * max_nspai * N);
 
         sat_block_frobenius_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, const unsigned int, const unsigned int, cl::LocalSpaceArg>(cl::Kernel(program, "sat_block_frobenius")));
         find_max_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::LocalSpaceArg>(cl::Kernel(program, "find_max")));
         findJ_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, const unsigned int, const double, cl::Buffer&>(cl::Kernel(program, "findJ")));
+        findI_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, const unsigned int>(cl::Kernel(program, "findI")));
 
     } catch (const cl::Error& error) {
         cout << "OpenCL Error: " << error.what() << "(" << error.err() << ")" << endl;
@@ -285,7 +307,7 @@ void openclBackend::set_sizes(){
     nnz = nnzValues.size();
     nblocks = colIndices.size();
     N = rowPointers.size() - 1;
-    n2max = ceil(double(nblocks)/double(N));
+    max_nspai = ceil(double(nblocks)/double(N));
 }
 
 void openclBackend::run(){
@@ -301,7 +323,9 @@ void openclBackend::run(){
 
     sat_block_frobenius_w(d_nnzValues, d_satFrobenius);
     find_max_w(d_satFrobenius, d_colIndices, d_rowPointers, d_mapping, d_maxvals);
-    findJ_w(d_satFrobenius, d_colIndices, d_rowPointers, d_mapping, d_maxvals, d_Jind);
+    findJ_w(d_satFrobenius, d_colIndices, d_rowPointers, d_mapping, d_maxvals, d_J);
+    findI_w(d_J, d_I);
 
-    read_data_from_gpu<int>(d_Jind, n2max * N, "Jind");
+    read_data_from_gpu<int>(d_J, max_nspai * N, "J");
+    read_data_from_gpu<int>(d_I, max_nspai * N, "I");
 }
