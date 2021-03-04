@@ -99,6 +99,36 @@ __kernel void findI(__global const unsigned int *J,
 }
 )";
 
+const char* construct_A_hat_s = R"(
+__kernel void construct_A_hat(__global const unsigned int *J,
+                              __global const unsigned int *I,
+                              __global const double *nnzValues,
+                              __global const unsigned int *colIndex,
+                              __global const unsigned int *rowPtr,
+                              __global double *A_hat,
+                              const unsigned int nmax)
+{
+    const unsigned int wiId = get_local_id(0);
+    const unsigned int wgId = get_group_id(0);
+    const unsigned int wgSz = get_local_size(0);
+    const unsigned int i_it = wiId / nmax; // work_group_size must be nmax*nmax (=64)
+    const unsigned int j_it = wiId % nmax;
+    const unsigned int i = I[nmax * wgId + i_it];
+    const unsigned int j = J[nmax * wgId + j_it];
+
+    if(i != -1){
+        if(j != -1){
+            for(unsigned int k = rowPtr[j]; k < rowPtr[j + 1]; k++){
+                if(colIndex[k] == i){
+                    A_hat[wgId * nmax * nmax + i_it * nmax + j_it] = nnzValues[k];
+                    break;
+                }
+            }
+        }
+    }
+}
+)";
+
 const char* sat_block_frobenius_s = R"(
 __kernel void sat_block_frobenius(
     __global const double *vals,

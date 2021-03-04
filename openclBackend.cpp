@@ -211,12 +211,32 @@ void openclBackend::findI_w(cl::Buffer j, cl::Buffer i){
     }
 }
 
+void openclBackend::construct_A_hat_w(cl::Buffer j, cl::Buffer i, cl::Buffer vals, cl::Buffer cind, cl::Buffer rptr, cl::Buffer A_hat){
+    queue->enqueueFillBuffer(A_hat, 0, 0, sizeof(double) * max_nspai * max_nspai * N);
+
+    unsigned int work_group_size = 64;
+    unsigned int num_work_groups = N;
+    unsigned int total_work_items = num_work_groups * work_group_size;
+
+    auto start = high_resolution_clock::now();
+    cl::Event event = (*construct_A_hat_k)(cl::EnqueueArgs(*queue, cl::NDRange(total_work_items), cl::NDRange(work_group_size)),
+                                           j, i, vals, cind, rptr, A_hat, max_nspai);
+
+    if(verbosity >= 2){
+        event.wait();
+        auto stop = high_resolution_clock::now();
+        auto duration = duration_cast<microseconds>(stop - start);
+        cout << "construct_A_hat time: " << duration.count() << " us" << endl << endl;
+    }
+}
+
 void openclBackend::initialize(){
     try{
         cl::Program::Sources source(1, make_pair(sat_block_frobenius_s, strlen(sat_block_frobenius_s)));
         source.emplace_back(make_pair(find_max_s, strlen(find_max_s)));
         source.emplace_back(make_pair(findJ_s, strlen(findJ_s)));
         source.emplace_back(make_pair(findI_s, strlen(findI_s)));
+        source.emplace_back(make_pair(construct_A_hat_s, strlen(construct_A_hat_s)));
         program = cl::Program(*context, source);
         program.build(devices);
 
@@ -228,11 +248,13 @@ void openclBackend::initialize(){
         d_maxvals = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(double) * N);
         d_J = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(int) * max_nspai * N);
         d_I = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(int) * max_nspai * N);
+        d_A_hat = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(double) * max_nspai * max_nspai * N);
 
         sat_block_frobenius_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, const unsigned int, const unsigned int, cl::LocalSpaceArg>(cl::Kernel(program, "sat_block_frobenius")));
         find_max_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::LocalSpaceArg>(cl::Kernel(program, "find_max")));
         findJ_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, const unsigned int, const double, cl::Buffer&>(cl::Kernel(program, "findJ")));
         findI_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, const unsigned int>(cl::Kernel(program, "findI")));
+        construct_A_hat_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, const unsigned int>(cl::Kernel(program, "construct_A_hat")));
 
     } catch (const cl::Error& error) {
         cout << "OpenCL Error: " << error.what() << "(" << error.err() << ")" << endl;
@@ -325,7 +347,7 @@ void openclBackend::run(){
     find_max_w(d_satFrobenius, d_colIndices, d_rowPointers, d_mapping, d_maxvals);
     findJ_w(d_satFrobenius, d_colIndices, d_rowPointers, d_mapping, d_maxvals, d_J);
     findI_w(d_J, d_I);
+    construct_A_hat_w(d_J, d_I, d_satFrobenius, d_colIndices, d_rowPointers, d_A_hat);
 
-    read_data_from_gpu<int>(d_J, max_nspai * N, "J");
-    read_data_from_gpu<int>(d_I, max_nspai * N, "I");
+    read_data_from_gpu<double>(d_A_hat, max_nspai * max_nspai * N, "A_hat");
 }
