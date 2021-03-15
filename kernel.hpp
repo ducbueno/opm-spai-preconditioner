@@ -86,7 +86,6 @@ __kernel void findI(__global const unsigned int *J,
 {
     const unsigned int wiId = get_local_id(0);
     const unsigned int wgId = get_group_id(0);
-    const unsigned int wgSz = get_local_size(0);
 
     if(wiId < nmax){
         unsigned int col = wgId;
@@ -110,7 +109,6 @@ __kernel void construct_A_hat(__global const unsigned int *J,
 {
     const unsigned int wiId = get_local_id(0);
     const unsigned int wgId = get_group_id(0);
-    const unsigned int wgSz = get_local_size(0);
     const unsigned int i_it = wiId / nmax; // work_group_size must be nmax*nmax (=64)
     const unsigned int j_it = wiId % nmax;
     const unsigned int i = I[nmax * wgId + i_it];
@@ -130,12 +128,11 @@ __kernel void construct_A_hat(__global const unsigned int *J,
 )";
 
 const char* sat_block_frobenius_s = R"(
-__kernel void sat_block_frobenius(
-    __global const double *vals,
-    __global double *result,
-    const unsigned int block_size,
-    const unsigned int num_blocks,
-    __local double *tmp)
+__kernel void sat_block_frobenius(__global const double *vals,
+                                  __global double *result,
+                                  const unsigned int block_size,
+                                  const unsigned int num_blocks,
+                                  __local double *tmp)
 {
     const unsigned int idx_t = get_local_id(0);
     const unsigned int bs = block_size;
@@ -161,6 +158,56 @@ __kernel void sat_block_frobenius(
         if(idx_t % 4 == 0){
             result[block] = tmp[idx_t];
         }
+    }
+}
+)";
+
+const char* qr_decomp_iter_s = R"(
+#pragma OPENCL EXTENSION cl_khr_fp64 : enable
+
+__kernel void qr_decomp_iter(__global double *Q,
+                             __global double *R,
+                             __local double *tmp,
+                             const unsigned int nmax,
+                             const unsigned int qcol)
+{
+    const unsigned int wiId = get_local_id(0);
+    const unsigned int wgId = get_group_id(0);
+    const unsigned int row_it = wiId % nmax;
+    const unsigned int col_it = wiId / nmax;
+    const unsigned int target_col = (qcol + col_it) % nmax;
+    const double val = Q[wgId * nmax * nmax + row_it * nmax + qcol];
+    const double valn = Q[wgId * nmax * nmax + row_it * nmax + target_col];
+    double colnorm, dot;
+
+    tmp[wiId] = val * valn;
+
+    for(unsigned int offset = 1; offset < nmax; offset <<= 1){
+        if(wiId % (2 * offset) == 0){
+            tmp[wiId] += tmp[wiId + offset];
+        }
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
+
+    colnorm = sqrt(tmp[0]);
+    R[wgId * nmax * nmax + qcol * nmax + qcol] = colnorm;
+
+    if(col_it == qcol){
+        if(colnorm != 0){
+            Q[wgId * nmax * nmax + row_it * nmax + col_it] /= colnorm;
+        }
+    }
+
+    if(col_it > qcol){
+        if(colnorm != 0){
+            dot = tmp[(col_it - qcol) * nmax] / colnorm;
+        }
+        else{
+            dot = 0.0;
+        }
+
+        R[wgId * nmax * nmax + qcol * nmax + col_it] = dot;
+        Q[wgId * nmax * nmax + row_it * nmax + col_it] -= Q[wgId * nmax * nmax + row_it * nmax + qcol] * dot;
     }
 }
 )";
