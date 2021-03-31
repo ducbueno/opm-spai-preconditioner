@@ -162,7 +162,7 @@ __kernel void sat_block_frobenius(__global const double *vals,
 }
 )";
 
-const char* qr_decomp_iter_s = R"(
+const char *qr_decomp_iter_s = R"(
 #pragma OPENCL EXTENSION cl_khr_fp64 : enable
 
 __kernel void qr_decomp_iter(__global double *Q,
@@ -209,6 +209,52 @@ __kernel void qr_decomp_iter(__global double *Q,
         R[wgId * nmax * nmax + qcol * nmax + col_it] = dot;
         Q[wgId * nmax * nmax + row_it * nmax + col_it] -= Q[wgId * nmax * nmax + row_it * nmax + qcol] * dot;
     }
+}
+)";
+
+const char *solve_qr_subsystems_s = R"(
+__kernel void solve_qr_subsystems(__global const unsigned int *J,
+                                  __global const double *Q,
+                                  __global double *R,
+                                  __global double *b,
+                                  const unsigned int nmax)
+{
+    const unsigned int wiId = get_local_id(0);
+    const unsigned int wgId = get_group_id(0);
+    const unsigned int row_it = wiId / nmax;
+    const unsigned int col_it = wiId % nmax;
+    const double tol = 1E-08;
+    double dot;
+
+    if(J[nmax * wgId + col_it] == wgId){
+        b[wgId * nmax + row_it] = Q[wgId * nmax * nmax + row_it * nmax + col_it];
+    }
+
+    if(R[wgId * nmax * nmax + row_it * nmax + row_it] > tol){
+        b[wgId * nmax + row_it] /= R[wgId * nmax * nmax + row_it * nmax + row_it];
+        R[wgId * nmax * nmax + row_it * nmax + col_it] /= R[wgId * nmax * nmax + row_it * nmax + row_it];
+        R[wgId * nmax * nmax + row_it * nmax + row_it] = -R[wgId * nmax * nmax + row_it * nmax + row_it];
+    }
+    else{
+        b[wgId * nmax + row_it] = 0;
+    }
+
+    if(wiId == 0){
+        for(unsigned int i = nmax - 1; i > 0; i--){
+            dot = 0.0;
+            for(unsigned int j = nmax; j > i - 1; j--){
+                dot += R[wgId * nmax * nmax + (i - 1) * nmax + (j - 1)] * b[wgId * nmax + (j - 1)];
+            }
+            b[wgId * nmax + (i - 1)] = -dot;
+        }
+    }
+}
+)";
+
+const char *apply_spai_s = R"(
+__kernel void apply_spai()
+{
+
 }
 )";
 

@@ -258,6 +258,25 @@ void openclBackend::qr_decomp_iter_w(cl::Buffer q, cl::Buffer r){
     }
 }
 
+void openclBackend::solve_qr_subsystems_w(cl::Buffer j, cl::Buffer q, cl::Buffer r, cl::Buffer b){
+    queue->enqueueFillBuffer(b, 0, 0, sizeof(double) * max_nspai * N);
+
+    unsigned int work_group_size = 64;
+    unsigned int num_work_groups = N;
+    unsigned int total_work_items = num_work_groups * work_group_size;
+
+    auto start = high_resolution_clock::now();
+    cl::Event event = (*solve_qr_subsystems_k)(cl::EnqueueArgs(*queue, cl::NDRange(total_work_items), cl::NDRange(work_group_size)),
+                                               j, q, r, b, max_nspai);
+
+    if(verbosity >= 2){
+        event.wait();
+        auto stop = high_resolution_clock::now();
+        auto duration = duration_cast<microseconds>(stop - start);
+        cout << "solve_qr_subsystems time: " << duration.count() << " us" << endl << endl;
+    }
+}
+
 void openclBackend::initialize(){
     try{
         cl::Program::Sources source(1, make_pair(sat_block_frobenius_s, strlen(sat_block_frobenius_s)));
@@ -266,6 +285,7 @@ void openclBackend::initialize(){
         source.emplace_back(make_pair(findI_s, strlen(findI_s)));
         source.emplace_back(make_pair(construct_A_hat_s, strlen(construct_A_hat_s)));
         source.emplace_back(make_pair(qr_decomp_iter_s, strlen(qr_decomp_iter_s)));
+        source.emplace_back(make_pair(solve_qr_subsystems_s, strlen(solve_qr_subsystems_s)));
         program = cl::Program(*context, source);
         program.build(devices);
 
@@ -279,6 +299,7 @@ void openclBackend::initialize(){
         d_I = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(int) * max_nspai * N);
         d_A_hat = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(double) * max_nspai * max_nspai * N);
         d_R = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(double) * max_nspai * max_nspai * N);
+        d_spaiSolutions = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(int) * max_nspai * N);
 
         sat_block_frobenius_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, const unsigned int, const unsigned int, cl::LocalSpaceArg>(cl::Kernel(program, "sat_block_frobenius")));
         find_max_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::LocalSpaceArg>(cl::Kernel(program, "find_max")));
@@ -286,6 +307,7 @@ void openclBackend::initialize(){
         findI_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, const unsigned int>(cl::Kernel(program, "findI")));
         construct_A_hat_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, const unsigned int>(cl::Kernel(program, "construct_A_hat")));
         qr_decomp_iter_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, cl::LocalSpaceArg, const unsigned int, const unsigned int>(cl::Kernel(program, "qr_decomp_iter")));
+        solve_qr_subsystems_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, const unsigned int>(cl::Kernel(program, "solve_qr_subsystems")));
 
     } catch (const cl::Error& error) {
         cout << "OpenCL Error: " << error.what() << "(" << error.err() << ")" << endl;
@@ -380,7 +402,7 @@ void openclBackend::run(){
     findI_w(d_J, d_I);
     construct_A_hat_w(d_J, d_I, d_satFrobenius, d_colIndices, d_rowPointers, d_A_hat);
     qr_decomp_iter_w(d_A_hat, d_R);
+    solve_qr_subsystems_w(d_J, d_A_hat, d_R, d_spaiSolutions);
 
-    read_data_from_gpu<double>(d_A_hat, max_nspai * max_nspai * N, "Q");
-    read_data_from_gpu<double>(d_R, max_nspai * max_nspai * N, "R");
+    read_data_from_gpu<double>(d_spaiSolutions, max_nspai * N, "spaiSolutions");
 }
