@@ -251,10 +251,45 @@ __kernel void solve_qr_subsystems(__global const unsigned int *J,
 }
 )";
 
-const char *apply_spai_s = R"(
-__kernel void apply_spai()
+const char *apply_s = R"(
+__kernel void apply(__global const unsigned int *J,
+                    __global const double *spai,
+                    __global const double *nnzValues,
+                    __global const unsigned int *rowIndex,
+                    __global const unsigned int *colPtr,
+                    __global const double *input,
+                    __global double *output,
+                    const unsigned int nmax)
 {
+    const unsigned int wiId = get_local_id(0);
+    const unsigned int wgId = get_group_id(0);
+    const unsigned int bs = 3;
+    double precond[3];
 
+    if(wiId < nmax){
+        const unsigned int j = J[wgId * nmax + wiId];
+
+        if(j != -1){
+            if(j == wgId){
+                for(unsigned int i = colPtr[wgId]; i < colPtr[wgId + 1]; i++){
+                    if(rowIndex[i] == wgId){
+                        precond[0] = 1 / nnzValues[i * bs * bs]; // invp
+                        break;
+                    }
+                }
+            }
+            else{
+                precond[0] = 0.0;
+            }
+
+            precond[1] = spai[nmax * wgId + wiId];
+            precond[2] = spai[nmax * wgId + wiId];
+
+          for(unsigned int i = 0; i < bs; i++){
+              output[j * bs + i] += precond[i] * input[j * bs + i];
+          }
+        }
+    }
 }
 )";
 

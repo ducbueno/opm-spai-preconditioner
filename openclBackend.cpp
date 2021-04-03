@@ -277,6 +277,26 @@ void openclBackend::solve_qr_subsystems_w(cl::Buffer j, cl::Buffer q, cl::Buffer
     }
 }
 
+void openclBackend::apply_w(cl::Buffer j, cl::Buffer spai, cl::Buffer vals, cl::Buffer rind, cl::Buffer cptr, cl::Buffer in, cl::Buffer out){
+    queue->enqueueFillBuffer(in, 1.0, 0, sizeof(double) * block_size * N);
+    queue->enqueueFillBuffer(out, 0, 0, sizeof(double) * block_size * N);
+
+    unsigned int work_group_size = 32;
+    unsigned int num_work_groups = N;
+    unsigned int total_work_items = num_work_groups * work_group_size;
+
+    auto start = high_resolution_clock::now();
+    cl::Event event = (*apply_k)(cl::EnqueueArgs(*queue, cl::NDRange(total_work_items), cl::NDRange(work_group_size)),
+                                                 j, spai, vals, rind, cptr, in, out, max_nspai);
+
+    if(verbosity >= 2){
+        event.wait();
+        auto stop = high_resolution_clock::now();
+        auto duration = duration_cast<microseconds>(stop - start);
+        cout << "apply time: " << duration.count() << " us" << endl << endl;
+    }
+}
+
 void openclBackend::initialize(){
     try{
         cl::Program::Sources source(1, make_pair(sat_block_frobenius_s, strlen(sat_block_frobenius_s)));
@@ -286,6 +306,7 @@ void openclBackend::initialize(){
         source.emplace_back(make_pair(construct_A_hat_s, strlen(construct_A_hat_s)));
         source.emplace_back(make_pair(qr_decomp_iter_s, strlen(qr_decomp_iter_s)));
         source.emplace_back(make_pair(solve_qr_subsystems_s, strlen(solve_qr_subsystems_s)));
+        source.emplace_back(make_pair(apply_s, strlen(apply_s)));
         program = cl::Program(*context, source);
         program.build(devices);
 
@@ -299,7 +320,9 @@ void openclBackend::initialize(){
         d_I = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(int) * max_nspai * N);
         d_A_hat = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(double) * max_nspai * max_nspai * N);
         d_R = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(double) * max_nspai * max_nspai * N);
-        d_spaiSolutions = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(int) * max_nspai * N);
+        d_spaiSolutions = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(double) * max_nspai * N);
+        d_input = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(double) * block_size * N);
+        d_output = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(double) * block_size * N);
 
         sat_block_frobenius_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, const unsigned int, const unsigned int, cl::LocalSpaceArg>(cl::Kernel(program, "sat_block_frobenius")));
         find_max_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::LocalSpaceArg>(cl::Kernel(program, "find_max")));
@@ -308,6 +331,7 @@ void openclBackend::initialize(){
         construct_A_hat_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, const unsigned int>(cl::Kernel(program, "construct_A_hat")));
         qr_decomp_iter_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, cl::LocalSpaceArg, const unsigned int, const unsigned int>(cl::Kernel(program, "qr_decomp_iter")));
         solve_qr_subsystems_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, const unsigned int>(cl::Kernel(program, "solve_qr_subsystems")));
+        apply_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, const unsigned int>(cl::Kernel(program, "apply")));
 
     } catch (const cl::Error& error) {
         cout << "OpenCL Error: " << error.what() << "(" << error.err() << ")" << endl;
@@ -403,6 +427,7 @@ void openclBackend::run(){
     construct_A_hat_w(d_J, d_I, d_satFrobenius, d_colIndices, d_rowPointers, d_A_hat);
     qr_decomp_iter_w(d_A_hat, d_R);
     solve_qr_subsystems_w(d_J, d_A_hat, d_R, d_spaiSolutions);
+    apply_w(d_J, d_spaiSolutions, d_nnzValues, d_colIndices, d_rowPointers, d_input, d_output);
 
-    read_data_from_gpu<double>(d_spaiSolutions, max_nspai * N, "spaiSolutions");
+    read_data_from_gpu<double>(d_output, block_size * N, "output");
 }
