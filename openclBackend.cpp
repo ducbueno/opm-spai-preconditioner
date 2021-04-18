@@ -176,15 +176,15 @@ void openclBackend::find_max_w(cl::Buffer vals, cl::Buffer cind, cl::Buffer rptr
 }
 
 void openclBackend::findJ_w(cl::Buffer vals, cl::Buffer cind, cl::Buffer rptr, cl::Buffer map, cl::Buffer max, cl::Buffer j){
-    queue->enqueueFillBuffer(j, -1, 0, sizeof(int) * max_nspai * N);
+    queue->enqueueFillBuffer(j, -1, 0, sizeof(int) * nblocks);
 
-    unsigned int work_group_size = 32;
-    unsigned int num_work_groups = N;
+    unsigned int work_group_size = 128;
+    unsigned int num_work_groups = ceilDivision(N, work_group_size);
     unsigned int total_work_items = num_work_groups * work_group_size;
 
     auto start = high_resolution_clock::now();
     cl::Event event = (*findJ_k)(cl::EnqueueArgs(*queue, cl::NDRange(total_work_items), cl::NDRange(work_group_size)),
-                                 vals, cind, rptr, map, max, max_nspai, tau, j);
+                                 vals, cind, rptr, map, max, N, tau, j);
 
     if(verbosity >= 2){
         event.wait();
@@ -194,16 +194,16 @@ void openclBackend::findJ_w(cl::Buffer vals, cl::Buffer cind, cl::Buffer rptr, c
     }
 }
 
-void openclBackend::findI_w(cl::Buffer j, cl::Buffer i){
-    queue->enqueueFillBuffer(i, -1, 0, sizeof(int) * max_nspai * N);
+void openclBackend::findI_w(cl::Buffer j, cl::Buffer i, cl::Buffer map, cl::Buffer rptr){
+    queue->enqueueFillBuffer(i, -1, 0, sizeof(int) * nblocks);
 
-    unsigned int work_group_size = 32;
-    unsigned int num_work_groups = N;
+    unsigned int work_group_size = 128;
+    unsigned int num_work_groups = ceilDivision(N, work_group_size);
     unsigned int total_work_items = num_work_groups * work_group_size;
 
     auto start = high_resolution_clock::now();
     cl::Event event = (*findI_k)(cl::EnqueueArgs(*queue, cl::NDRange(total_work_items), cl::NDRange(work_group_size)),
-                                 j, i, max_nspai);
+                                 j, i, map, rptr, N);
 
     if(verbosity >= 2){
         event.wait();
@@ -213,6 +213,26 @@ void openclBackend::findI_w(cl::Buffer j, cl::Buffer i){
     }
 }
 
+void openclBackend::get_spai_vals_w(cl::Buffer i, cl::Buffer vals, cl::Buffer cind, cl::Buffer rptr, cl::Buffer norm){
+    unsigned int work_group_size = 128;
+    unsigned int num_work_groups = ceilDivision(N, work_group_size);
+    unsigned int total_work_items = num_work_groups * work_group_size;
+    unsigned int lmem_per_work_group = sizeof(double) * work_group_size;
+    unsigned int Nb = N + 1;
+
+    auto start = high_resolution_clock::now();
+    cl::Event event = (*get_spai_vals_k)(cl::EnqueueArgs(*queue, cl::NDRange(total_work_items), cl::NDRange(work_group_size)),
+                                         i, vals, cind, rptr, norm, cl::Local(lmem_per_work_group), Nb);
+
+    if(verbosity >= 2){
+        event.wait();
+        auto stop = high_resolution_clock::now();
+        auto duration = duration_cast<microseconds>(stop - start);
+        cout << "get_spai_vals time: " << duration.count() << " us" << endl << endl;
+    }
+}
+
+/*
 void openclBackend::construct_A_hat_w(cl::Buffer j, cl::Buffer i, cl::Buffer vals, cl::Buffer cind, cl::Buffer rptr, cl::Buffer A_hat){
     queue->enqueueFillBuffer(A_hat, 0, 0, sizeof(double) * max_nspai * max_nspai * N);
 
@@ -296,6 +316,7 @@ void openclBackend::apply_w(cl::Buffer j, cl::Buffer spai, cl::Buffer vals, cl::
         cout << "apply time: " << duration.count() << " us" << endl << endl;
     }
 }
+*/
 
 void openclBackend::initialize(){
     try{
@@ -303,10 +324,11 @@ void openclBackend::initialize(){
         source.emplace_back(make_pair(find_max_s, strlen(find_max_s)));
         source.emplace_back(make_pair(findJ_s, strlen(findJ_s)));
         source.emplace_back(make_pair(findI_s, strlen(findI_s)));
-        source.emplace_back(make_pair(construct_A_hat_s, strlen(construct_A_hat_s)));
-        source.emplace_back(make_pair(qr_decomp_iter_s, strlen(qr_decomp_iter_s)));
-        source.emplace_back(make_pair(solve_qr_subsystems_s, strlen(solve_qr_subsystems_s)));
-        source.emplace_back(make_pair(apply_s, strlen(apply_s)));
+        source.emplace_back(make_pair(get_spai_vals_s, strlen(get_spai_vals_s)));
+        //source.emplace_back(make_pair(construct_A_hat_s, strlen(construct_A_hat_s)));
+        //source.emplace_back(make_pair(qr_decomp_iter_s, strlen(qr_decomp_iter_s)));
+        //source.emplace_back(make_pair(solve_qr_subsystems_s, strlen(solve_qr_subsystems_s)));
+        //source.emplace_back(make_pair(apply_s, strlen(apply_s)));
         program = cl::Program(*context, source);
         program.build(devices);
 
@@ -316,22 +338,24 @@ void openclBackend::initialize(){
         d_mapping = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(int) * nblocks);
         d_satFrobenius = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(double) * nblocks);
         d_maxvals = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(double) * N);
-        d_J = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(int) * max_nspai * N);
-        d_I = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(int) * max_nspai * N);
-        d_A_hat = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(double) * max_nspai * max_nspai * N);
-        d_R = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(double) * max_nspai * max_nspai * N);
-        d_spaiSolutions = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(double) * max_nspai * N);
-        d_input = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(double) * block_size * N);
-        d_output = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(double) * block_size * N);
+        d_J = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(int) * nblocks);
+        d_I = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(int) * nblocks);
+        d_row_norm = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(double) * N);
+        //d_A_hat = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(double) * max_nspai * max_nspai * N);
+        //d_R = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(double) * max_nspai * max_nspai * N);
+        //d_spaiSolutions = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(double) * max_nspai * N);
+        //d_input = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(double) * block_size * N);
+        //d_output = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(double) * block_size * N);
 
         sat_block_frobenius_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, const unsigned int, const unsigned int, cl::LocalSpaceArg>(cl::Kernel(program, "sat_block_frobenius")));
         find_max_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::LocalSpaceArg>(cl::Kernel(program, "find_max")));
         findJ_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, const unsigned int, const double, cl::Buffer&>(cl::Kernel(program, "findJ")));
-        findI_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, const unsigned int>(cl::Kernel(program, "findI")));
-        construct_A_hat_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, const unsigned int>(cl::Kernel(program, "construct_A_hat")));
-        qr_decomp_iter_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, cl::LocalSpaceArg, const unsigned int, const unsigned int>(cl::Kernel(program, "qr_decomp_iter")));
-        solve_qr_subsystems_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, const unsigned int>(cl::Kernel(program, "solve_qr_subsystems")));
-        apply_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, const unsigned int>(cl::Kernel(program, "apply")));
+        findI_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, const unsigned int>(cl::Kernel(program, "findI")));
+        get_spai_vals_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::LocalSpaceArg, const unsigned int>(cl::Kernel(program, "get_spai_vals")));
+        //construct_A_hat_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, const unsigned int>(cl::Kernel(program, "construct_A_hat")));
+        //qr_decomp_iter_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, cl::LocalSpaceArg, const unsigned int, const unsigned int>(cl::Kernel(program, "qr_decomp_iter")));
+        //solve_qr_subsystems_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, const unsigned int>(cl::Kernel(program, "solve_qr_subsystems")));
+        //apply_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, const unsigned int>(cl::Kernel(program, "apply")));
 
     } catch (const cl::Error& error) {
         cout << "OpenCL Error: " << error.what() << "(" << error.err() << ")" << endl;
@@ -423,11 +447,12 @@ void openclBackend::run(){
     sat_block_frobenius_w(d_nnzValues, d_satFrobenius);
     find_max_w(d_satFrobenius, d_colIndices, d_rowPointers, d_mapping, d_maxvals);
     findJ_w(d_satFrobenius, d_colIndices, d_rowPointers, d_mapping, d_maxvals, d_J);
-    findI_w(d_J, d_I);
-    construct_A_hat_w(d_J, d_I, d_satFrobenius, d_colIndices, d_rowPointers, d_A_hat);
-    qr_decomp_iter_w(d_A_hat, d_R);
-    solve_qr_subsystems_w(d_J, d_A_hat, d_R, d_spaiSolutions);
-    apply_w(d_J, d_spaiSolutions, d_nnzValues, d_colIndices, d_rowPointers, d_input, d_output);
+    findI_w(d_J, d_I, d_mapping, d_rowPointers);
+    get_spai_vals_w(d_I, d_satFrobenius, d_colIndices, d_rowPointers, d_row_norm);
+    //construct_A_hat_w(d_J, d_I, d_satFrobenius, d_colIndices, d_rowPointers, d_A_hat);
+    //qr_decomp_iter_w(d_A_hat, d_R);
+    //solve_qr_subsystems_w(d_J, d_A_hat, d_R, d_spaiSolutions);
+    //apply_w(d_J, d_spaiSolutions, d_nnzValues, d_colIndices, d_rowPointers, d_input, d_output);
 
-    read_data_from_gpu<double>(d_output, block_size * N, "output");
+    read_data_from_gpu<double>(d_row_norm, N, "row_norms_new_method");
 }
