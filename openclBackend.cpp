@@ -175,7 +175,8 @@ void openclBackend::find_max_w(cl::Buffer vals, cl::Buffer cind, cl::Buffer rptr
     }
 }
 
-void openclBackend::findJ_w(cl::Buffer vals, cl::Buffer cind, cl::Buffer rptr, cl::Buffer map, cl::Buffer max, cl::Buffer j){
+void openclBackend::assemble_I_J_w(cl::Buffer vals, cl::Buffer cind, cl::Buffer rptr, cl::Buffer map, cl::Buffer max, cl::Buffer i, cl::Buffer j){
+    queue->enqueueFillBuffer(i, -1, 0, sizeof(int) * nblocks);
     queue->enqueueFillBuffer(j, -1, 0, sizeof(int) * nblocks);
 
     unsigned int work_group_size = 128;
@@ -183,33 +184,14 @@ void openclBackend::findJ_w(cl::Buffer vals, cl::Buffer cind, cl::Buffer rptr, c
     unsigned int total_work_items = num_work_groups * work_group_size;
 
     auto start = high_resolution_clock::now();
-    cl::Event event = (*findJ_k)(cl::EnqueueArgs(*queue, cl::NDRange(total_work_items), cl::NDRange(work_group_size)),
-                                 vals, cind, rptr, map, max, N, tau, j);
+    cl::Event event = (*assemble_I_J_k)(cl::EnqueueArgs(*queue, cl::NDRange(total_work_items), cl::NDRange(work_group_size)),
+                                        vals, cind, rptr, map, max, N, tau, i, j);
 
     if(verbosity >= 2){
         event.wait();
         auto stop = high_resolution_clock::now();
         auto duration = duration_cast<microseconds>(stop - start);
-        cout << "findJ time: " << duration.count() << " us" << endl << endl;
-    }
-}
-
-void openclBackend::findI_w(cl::Buffer j, cl::Buffer i, cl::Buffer map, cl::Buffer rptr){
-    queue->enqueueFillBuffer(i, -1, 0, sizeof(int) * nblocks);
-
-    unsigned int work_group_size = 128;
-    unsigned int num_work_groups = ceilDivision(N, work_group_size);
-    unsigned int total_work_items = num_work_groups * work_group_size;
-
-    auto start = high_resolution_clock::now();
-    cl::Event event = (*findI_k)(cl::EnqueueArgs(*queue, cl::NDRange(total_work_items), cl::NDRange(work_group_size)),
-                                 j, i, map, rptr, N);
-
-    if(verbosity >= 2){
-        event.wait();
-        auto stop = high_resolution_clock::now();
-        auto duration = duration_cast<microseconds>(stop - start);
-        cout << "findI time: " << duration.count() << " us" << endl << endl;
+        cout << "assemble_I_J time: " << duration.count() << " us" << endl << endl;
     }
 }
 
@@ -233,70 +215,6 @@ void openclBackend::get_spai_vals_w(cl::Buffer i, cl::Buffer vals, cl::Buffer ci
 }
 
 /*
-void openclBackend::construct_A_hat_w(cl::Buffer j, cl::Buffer i, cl::Buffer vals, cl::Buffer cind, cl::Buffer rptr, cl::Buffer A_hat){
-    queue->enqueueFillBuffer(A_hat, 0, 0, sizeof(double) * max_nspai * max_nspai * N);
-
-    unsigned int work_group_size = 64;
-    unsigned int num_work_groups = N;
-    unsigned int total_work_items = num_work_groups * work_group_size;
-
-    auto start = high_resolution_clock::now();
-    cl::Event event = (*construct_A_hat_k)(cl::EnqueueArgs(*queue, cl::NDRange(total_work_items), cl::NDRange(work_group_size)),
-                                           j, i, vals, cind, rptr, A_hat, max_nspai);
-
-    if(verbosity >= 2){
-        event.wait();
-        auto stop = high_resolution_clock::now();
-        auto duration = duration_cast<microseconds>(stop - start);
-        cout << "construct_A_hat time: " << duration.count() << " us" << endl << endl;
-    }
-}
-
-void openclBackend::qr_decomp_iter_w(cl::Buffer q, cl::Buffer r){
-    queue->enqueueFillBuffer(r, 0, 0, sizeof(double) * max_nspai * max_nspai * N);
-
-    unsigned int work_group_size = 64;
-    unsigned int num_work_groups = N;
-    unsigned int total_work_items = num_work_groups * work_group_size;
-    unsigned int lmem_per_work_group = sizeof(double) * work_group_size;
-
-    cl::Event event;
-    time_point<high_resolution_clock> start, stop;
-    vector<long> durations(max_nspai);
-
-    for(unsigned int iter = 0; iter < max_nspai; iter++){
-        start = high_resolution_clock::now();
-        event = (*qr_decomp_iter_k)(cl::EnqueueArgs(*queue, cl::NDRange(total_work_items), cl::NDRange(work_group_size)),
-                                    q, r, cl::Local(lmem_per_work_group), max_nspai, iter);
-        event.wait();
-        stop = high_resolution_clock::now();
-        durations[iter] = duration_cast<microseconds>(stop - start).count();
-    }
-
-    if(verbosity >= 2){
-        cout << "qr_decomp time: " << accumulate(durations.begin(), durations.end(), 0) << " us" << endl << endl;
-    }
-}
-
-void openclBackend::solve_qr_subsystems_w(cl::Buffer j, cl::Buffer q, cl::Buffer r, cl::Buffer b){
-    queue->enqueueFillBuffer(b, 0, 0, sizeof(double) * max_nspai * N);
-
-    unsigned int work_group_size = 64;
-    unsigned int num_work_groups = N;
-    unsigned int total_work_items = num_work_groups * work_group_size;
-
-    auto start = high_resolution_clock::now();
-    cl::Event event = (*solve_qr_subsystems_k)(cl::EnqueueArgs(*queue, cl::NDRange(total_work_items), cl::NDRange(work_group_size)),
-                                               j, q, r, b, max_nspai);
-
-    if(verbosity >= 2){
-        event.wait();
-        auto stop = high_resolution_clock::now();
-        auto duration = duration_cast<microseconds>(stop - start);
-        cout << "solve_qr_subsystems time: " << duration.count() << " us" << endl << endl;
-    }
-}
-
 void openclBackend::apply_w(cl::Buffer j, cl::Buffer spai, cl::Buffer vals, cl::Buffer rind, cl::Buffer cptr, cl::Buffer in, cl::Buffer out){
     queue->enqueueFillBuffer(in, 1.0, 0, sizeof(double) * block_size * N);
     queue->enqueueFillBuffer(out, 0, 0, sizeof(double) * block_size * N);
@@ -322,8 +240,7 @@ void openclBackend::initialize(){
     try{
         cl::Program::Sources source(1, make_pair(sat_block_frobenius_s, strlen(sat_block_frobenius_s)));
         source.emplace_back(make_pair(find_max_s, strlen(find_max_s)));
-        source.emplace_back(make_pair(findJ_s, strlen(findJ_s)));
-        source.emplace_back(make_pair(findI_s, strlen(findI_s)));
+        source.emplace_back(make_pair(assemble_I_J_s, strlen(assemble_I_J_s)));
         source.emplace_back(make_pair(get_spai_vals_s, strlen(get_spai_vals_s)));
         //source.emplace_back(make_pair(construct_A_hat_s, strlen(construct_A_hat_s)));
         //source.emplace_back(make_pair(qr_decomp_iter_s, strlen(qr_decomp_iter_s)));
@@ -349,8 +266,7 @@ void openclBackend::initialize(){
 
         sat_block_frobenius_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, const unsigned int, const unsigned int, cl::LocalSpaceArg>(cl::Kernel(program, "sat_block_frobenius")));
         find_max_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::LocalSpaceArg>(cl::Kernel(program, "find_max")));
-        findJ_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, const unsigned int, const double, cl::Buffer&>(cl::Kernel(program, "findJ")));
-        findI_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, const unsigned int>(cl::Kernel(program, "findI")));
+        assemble_I_J_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, const unsigned int, const double, cl::Buffer&, cl::Buffer&>(cl::Kernel(program, "assemble_I_J")));
         get_spai_vals_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::LocalSpaceArg, const unsigned int>(cl::Kernel(program, "get_spai_vals")));
         //construct_A_hat_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, const unsigned int>(cl::Kernel(program, "construct_A_hat")));
         //qr_decomp_iter_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, cl::LocalSpaceArg, const unsigned int, const unsigned int>(cl::Kernel(program, "qr_decomp_iter")));
@@ -446,8 +362,7 @@ void openclBackend::run(){
 
     sat_block_frobenius_w(d_nnzValues, d_satFrobenius);
     find_max_w(d_satFrobenius, d_colIndices, d_rowPointers, d_mapping, d_maxvals);
-    findJ_w(d_satFrobenius, d_colIndices, d_rowPointers, d_mapping, d_maxvals, d_J);
-    findI_w(d_J, d_I, d_mapping, d_rowPointers);
+    assemble_I_J_w(d_satFrobenius, d_colIndices, d_rowPointers, d_mapping, d_maxvals, d_I, d_J);
     get_spai_vals_w(d_I, d_satFrobenius, d_colIndices, d_rowPointers, d_row_norm);
     //construct_A_hat_w(d_J, d_I, d_satFrobenius, d_colIndices, d_rowPointers, d_A_hat);
     //qr_decomp_iter_w(d_A_hat, d_R);

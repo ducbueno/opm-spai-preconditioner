@@ -31,8 +31,7 @@ class openclBackend{
 
         unique_ptr<cl::make_kernel<cl::Buffer&, cl::Buffer&, const unsigned int, const unsigned int, cl::LocalSpaceArg> > sat_block_frobenius_k;
         unique_ptr<cl::make_kernel<cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::LocalSpaceArg> > find_max_k;
-        unique_ptr<cl::make_kernel<cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, const unsigned int, const double, cl::Buffer&> > findJ_k;
-        unique_ptr<cl::make_kernel<cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, const unsigned int> > findI_k;
+        unique_ptr<cl::make_kernel<cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, const unsigned int, const double, cl::Buffer&, cl::Buffer&> > assemble_I_J_k;
         unique_ptr<cl::make_kernel<cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::LocalSpaceArg, const unsigned int> > get_spai_vals_k;
         //unique_ptr<cl::make_kernel<cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, const unsigned int> > construct_A_hat_k;
         //unique_ptr<cl::make_kernel<cl::Buffer&, cl::Buffer&, cl::LocalSpaceArg, const unsigned int, const unsigned int> > qr_decomp_iter_k;
@@ -42,8 +41,7 @@ class openclBackend{
         unsigned int ceilDivision(const unsigned int A, const unsigned int B);
         void sat_block_frobenius_w(cl::Buffer in, cl::Buffer out);
         void find_max_w(cl::Buffer vals, cl::Buffer rind, cl::Buffer cptr, cl::Buffer map, cl::Buffer max);
-        void findJ_w(cl::Buffer vals, cl::Buffer cind, cl::Buffer rptr, cl::Buffer map, cl::Buffer max, cl::Buffer j);
-        void findI_w(cl::Buffer j, cl::Buffer i, cl::Buffer map, cl::Buffer rptr);
+        void assemble_I_J_w(cl::Buffer vals, cl::Buffer cind, cl::Buffer rptr, cl::Buffer map, cl::Buffer max, cl::Buffer i, cl::Buffer j);
         void get_spai_vals_w(cl::Buffer i, cl::Buffer vals, cl::Buffer cind, cl::Buffer rptr, cl::Buffer norm);
         //void construct_A_hat_w(cl::Buffer j, cl::Buffer i, cl::Buffer vals, cl::Buffer cind, cl::Buffer rptr, cl::Buffer A_hat);
         //void qr_decomp_iter_w(cl::Buffer q, cl::Buffer r);
