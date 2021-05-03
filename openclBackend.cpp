@@ -195,16 +195,16 @@ void openclBackend::assemble_I_J_w(cl::Buffer vals, cl::Buffer cind, cl::Buffer 
     }
 }
 
-void openclBackend::get_spai_vals_w(cl::Buffer i, cl::Buffer vals, cl::Buffer cind, cl::Buffer rptr, cl::Buffer norm){
+void openclBackend::get_spai_w(cl::Buffer i, cl::Buffer j, cl::Buffer vals, cl::Buffer cind, cl::Buffer rptr, cl::Buffer map, cl::Buffer spai){
+    queue->enqueueFillBuffer(spai, 0, 0, sizeof(double) * nblocks);
+
     unsigned int work_group_size = 128;
-    unsigned int num_work_groups = ceilDivision(N, work_group_size);
+    unsigned int num_work_groups = N;
     unsigned int total_work_items = num_work_groups * work_group_size;
-    unsigned int lmem_per_work_group = sizeof(double) * work_group_size;
-    unsigned int Nb = N + 1;
 
     auto start = high_resolution_clock::now();
-    cl::Event event = (*get_spai_vals_k)(cl::EnqueueArgs(*queue, cl::NDRange(total_work_items), cl::NDRange(work_group_size)),
-                                         i, vals, cind, rptr, norm, cl::Local(lmem_per_work_group), Nb);
+    cl::Event event = (*get_spai_k)(cl::EnqueueArgs(*queue, cl::NDRange(total_work_items), cl::NDRange(work_group_size)),
+                                    i, j, vals, cind, rptr, map, spai);
 
     if(verbosity >= 2){
         event.wait();
@@ -241,10 +241,7 @@ void openclBackend::initialize(){
         cl::Program::Sources source(1, make_pair(sat_block_frobenius_s, strlen(sat_block_frobenius_s)));
         source.emplace_back(make_pair(find_max_s, strlen(find_max_s)));
         source.emplace_back(make_pair(assemble_I_J_s, strlen(assemble_I_J_s)));
-        source.emplace_back(make_pair(get_spai_vals_s, strlen(get_spai_vals_s)));
-        //source.emplace_back(make_pair(construct_A_hat_s, strlen(construct_A_hat_s)));
-        //source.emplace_back(make_pair(qr_decomp_iter_s, strlen(qr_decomp_iter_s)));
-        //source.emplace_back(make_pair(solve_qr_subsystems_s, strlen(solve_qr_subsystems_s)));
+        source.emplace_back(make_pair(get_spai_s, strlen(get_spai_s)));
         //source.emplace_back(make_pair(apply_s, strlen(apply_s)));
         program = cl::Program(*context, source);
         program.build(devices);
@@ -257,20 +254,14 @@ void openclBackend::initialize(){
         d_maxvals = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(double) * N);
         d_J = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(int) * nblocks);
         d_I = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(int) * nblocks);
-        d_row_norm = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(double) * N);
-        //d_A_hat = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(double) * max_nspai * max_nspai * N);
-        //d_R = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(double) * max_nspai * max_nspai * N);
-        //d_spaiSolutions = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(double) * max_nspai * N);
+        d_spai = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(double) * nblocks);
         //d_input = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(double) * block_size * N);
         //d_output = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(double) * block_size * N);
 
         sat_block_frobenius_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, const unsigned int, const unsigned int, cl::LocalSpaceArg>(cl::Kernel(program, "sat_block_frobenius")));
         find_max_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::LocalSpaceArg>(cl::Kernel(program, "find_max")));
         assemble_I_J_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, const unsigned int, const double, cl::Buffer&, cl::Buffer&>(cl::Kernel(program, "assemble_I_J")));
-        get_spai_vals_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::LocalSpaceArg, const unsigned int>(cl::Kernel(program, "get_spai_vals")));
-        //construct_A_hat_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, const unsigned int>(cl::Kernel(program, "construct_A_hat")));
-        //qr_decomp_iter_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, cl::LocalSpaceArg, const unsigned int, const unsigned int>(cl::Kernel(program, "qr_decomp_iter")));
-        //solve_qr_subsystems_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, const unsigned int>(cl::Kernel(program, "solve_qr_subsystems")));
+        get_spai_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&>(cl::Kernel(program, "get_spai")));
         //apply_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, const unsigned int>(cl::Kernel(program, "apply")));
 
     } catch (const cl::Error& error) {
@@ -363,11 +354,9 @@ void openclBackend::run(){
     sat_block_frobenius_w(d_nnzValues, d_satFrobenius);
     find_max_w(d_satFrobenius, d_colIndices, d_rowPointers, d_mapping, d_maxvals);
     assemble_I_J_w(d_satFrobenius, d_colIndices, d_rowPointers, d_mapping, d_maxvals, d_I, d_J);
-    get_spai_vals_w(d_I, d_satFrobenius, d_colIndices, d_rowPointers, d_row_norm);
-    //construct_A_hat_w(d_J, d_I, d_satFrobenius, d_colIndices, d_rowPointers, d_A_hat);
-    //qr_decomp_iter_w(d_A_hat, d_R);
-    //solve_qr_subsystems_w(d_J, d_A_hat, d_R, d_spaiSolutions);
+    get_spai_w(d_I, d_J, d_satFrobenius, d_colIndices, d_rowPointers, d_mapping, d_spai);
     //apply_w(d_J, d_spaiSolutions, d_nnzValues, d_colIndices, d_rowPointers, d_input, d_output);
 
-    read_data_from_gpu<double>(d_row_norm, N, "row_norms_new_method");
+    read_data_from_gpu<int>(d_I, nblocks, "J_new_method");
+    read_data_from_gpu<double>(d_spai, nblocks, "spai_new_method");
 }
