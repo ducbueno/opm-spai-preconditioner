@@ -181,19 +181,18 @@ __kernel void get_spai(__global const unsigned int *I,
         residual[idx_t] = 0.0;
         conjugate[idx_t] = 0.0;
 
-        // x0 = A(wb, :) / (A(wb, :)*A(wb, :)')
         for(unsigned int i = 0; i < n_valid_rows; i++){
             normalize_x0 += submat[n_valid_rows * one_row_idx + i] * submat[n_valid_rows * one_row_idx + i];
         }
-        x0[idx_t] = submat[n_valid_rows * one_row_idx + idx_t] / normalize_x0;
+        if(normalize_x0 != 0){
+            x0[idx_t] = submat[n_valid_rows * one_row_idx + idx_t] / normalize_x0;
+        }
 
-        // residual = b - A*x0
         for(unsigned int i = 0; i < n_valid_rows; i++){
             residual[idx_t] += submat[n_valid_rows * idx_t + i] * x0[i];
         }
         residual[idx_t] = (idx_t == one_row_idx) ? 0 : -residual[idx_t];
 
-        // conjugate = residual'*A*residual
         for(unsigned int i = 0; i < n_valid_rows; i++){
             conjugate[idx_t] += submat[n_valid_rows * idx_t + i] * residual[i];
         }
@@ -224,7 +223,6 @@ __kernel void get_spai(__global const unsigned int *I,
         for(unsigned int current = first; current < last; current++){
             if(rowIndex[current] == J[current]){
                 x[mapping[current]] = x0[p];
-                //x[mapping[current]] = normalize_residual;
                 p++;
             }
         }
@@ -233,36 +231,15 @@ __kernel void get_spai(__global const unsigned int *I,
 )";
 
 const char *apply_s = R"(
-double get_precond_val(unsigned int row,
-                       unsigned int col,
-                       unsigned int c,
-                       unsigned int r,
-                       double pval,
-                       double spai){
-    double precond = 0.0;
-
-    if(c == 0 && r == 0){
-        if(col == row){
-            precond = 1 / pval;
-        }
-    }
-    else if(c == 1 && r == 1){
-        precond = spai;
-    }
-    else if(c == 2 && r == 2){
-        precond = spai;
-    }
-
-    return precond;
-}
-
 __kernel void apply(__global const double *spai,
                     __global const double *nnzValues,
                     __global const unsigned int *colIndex,
                     __global const unsigned int *rowPtr,
+                    __global const unsigned int *I,
                     __global const double *input,
                     __global double *output,
-                    __local double *tmp,
+                    __local double *tmp_sat1,
+                    __local double *tmp_sat2,
                     const unsigned int nrows)
 {
     const unsigned int warpsize = 32;
@@ -272,40 +249,43 @@ __kernel void apply(__global const double *spai,
     const unsigned int bs = 3;
     const unsigned int num_threads = get_global_size(0);
     const unsigned int num_warps_in_grid = num_threads / warpsize;
-    const unsigned int num_active_threads = (warpsize / bs / bs) * bs * bs;
     const unsigned int num_blocks_per_warp = warpsize / bs / bs;
     const unsigned int lane = idx_t % warpsize;
-    const unsigned int c = (lane / bs) % bs;
-    const unsigned int r = lane % bs;
     unsigned int target_row = idx / warpsize;
 
     while(target_row < nrows){
         unsigned int first = rowPtr[target_row];
         unsigned int last = rowPtr[target_row + 1];
-        unsigned int block = first + lane / (bs * bs);
-        double local_out = 0.0;
+        unsigned int current = first + lane;
+        double local_sat1 = 0.0;
+        double local_sat2 = 0.0;
 
-        if(lane < num_active_threads){
-            for(; block < last; block += num_blocks_per_warp){
-                double input_elem = input[colIndex[block] * bs + c];
-                double M_elem = get_precond_val(target_row, colIndex[block], c, r, nnzValues[block * bs * bs], spai[block]);
-                local_out += M_elem * input_elem;
+        for(; current < last; current += num_blocks_per_warp){
+            if(colIndex[current] == I[current]){
+                if(colIndex[current] == target_row){
+                    output[target_row * bs] = input[target_row * bs] / nnzValues[current * bs * bs];
+                }
+
+                local_sat1 += spai[current] * input[colIndex[current] * bs + 1];
+                local_sat2 += spai[current] * input[colIndex[current] * bs + 2];
             }
         }
 
-        tmp[lane] = local_out;
+        tmp_sat1[lane] = local_sat1;
+        tmp_sat2[lane] = local_sat2;
         barrier(CLK_LOCAL_MEM_FENCE);
 
-        for(unsigned int offset = 3; offset <= 24; offset <<= 1){
+        for(unsigned int offset = 1; offset <= warpsize; offset <<= 1){
             if(lane + offset < warpsize){
-                tmp[lane] += tmp[lane + offset];
+                tmp_sat1[lane] += tmp_sat1[lane + offset];
+                tmp_sat2[lane] += tmp_sat2[lane + offset];
             }
             barrier(CLK_LOCAL_MEM_FENCE);
         }
 
-        if(lane < bs){
-            unsigned int row = target_row * bs + lane;
-            output[row] = tmp[lane];
+        if(lane == 0){
+            output[target_row * bs + 1] = tmp_sat1[0];
+            output[target_row * bs + 2] = tmp_sat2[0];
         }
 
         target_row += num_warps_in_grid;
