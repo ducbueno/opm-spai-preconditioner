@@ -210,22 +210,21 @@ void openclBackend::get_spai_w(cl::Buffer i, cl::Buffer j, cl::Buffer vals, cl::
         event.wait();
         auto stop = high_resolution_clock::now();
         auto duration = duration_cast<microseconds>(stop - start);
-        cout << "get_spai_vals time: " << duration.count() << " us" << endl << endl;
+        cout << "get_spai time: " << duration.count() << " us" << endl << endl;
     }
 }
 
-/*
-void openclBackend::apply_w(cl::Buffer j, cl::Buffer spai, cl::Buffer vals, cl::Buffer rind, cl::Buffer cptr, cl::Buffer in, cl::Buffer out){
+void openclBackend::apply_w(cl::Buffer spai, cl::Buffer vals, cl::Buffer cind, cl::Buffer rptr, cl::Buffer in, cl::Buffer out){
     queue->enqueueFillBuffer(in, 1.0, 0, sizeof(double) * block_size * N);
-    queue->enqueueFillBuffer(out, 0, 0, sizeof(double) * block_size * N);
 
-    unsigned int work_group_size = 32;
-    unsigned int num_work_groups = N;
+    unsigned int work_group_size = 128;
+    unsigned int num_work_groups = ceilDivision(N, work_group_size);
     unsigned int total_work_items = num_work_groups * work_group_size;
+    const unsigned int lmem_per_work_group = sizeof(double) * work_group_size;
 
     auto start = high_resolution_clock::now();
     cl::Event event = (*apply_k)(cl::EnqueueArgs(*queue, cl::NDRange(total_work_items), cl::NDRange(work_group_size)),
-                                                 j, spai, vals, rind, cptr, in, out, max_nspai);
+                                                 spai, vals, cind, rptr, in, out, cl::Local(lmem_per_work_group), N + 1);
 
     if(verbosity >= 2){
         event.wait();
@@ -234,7 +233,6 @@ void openclBackend::apply_w(cl::Buffer j, cl::Buffer spai, cl::Buffer vals, cl::
         cout << "apply time: " << duration.count() << " us" << endl << endl;
     }
 }
-*/
 
 void openclBackend::initialize(){
     try{
@@ -242,7 +240,7 @@ void openclBackend::initialize(){
         source.emplace_back(make_pair(find_max_s, strlen(find_max_s)));
         source.emplace_back(make_pair(assemble_I_J_s, strlen(assemble_I_J_s)));
         source.emplace_back(make_pair(get_spai_s, strlen(get_spai_s)));
-        //source.emplace_back(make_pair(apply_s, strlen(apply_s)));
+        source.emplace_back(make_pair(apply_s, strlen(apply_s)));
         program = cl::Program(*context, source);
         program.build(devices);
 
@@ -255,14 +253,14 @@ void openclBackend::initialize(){
         d_J = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(int) * nblocks);
         d_I = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(int) * nblocks);
         d_spai = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(double) * nblocks);
-        //d_input = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(double) * block_size * N);
-        //d_output = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(double) * block_size * N);
+        d_input = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(double) * block_size * N);
+        d_output = cl::Buffer(*context, CL_MEM_READ_WRITE, sizeof(double) * block_size * N);
 
         sat_block_frobenius_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, const unsigned int, const unsigned int, cl::LocalSpaceArg>(cl::Kernel(program, "sat_block_frobenius")));
         find_max_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::LocalSpaceArg>(cl::Kernel(program, "find_max")));
         assemble_I_J_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, const unsigned int, const double, cl::Buffer&, cl::Buffer&>(cl::Kernel(program, "assemble_I_J")));
         get_spai_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&>(cl::Kernel(program, "get_spai")));
-        //apply_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, const unsigned int>(cl::Kernel(program, "apply")));
+        apply_k.reset(new cl::make_kernel<cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::Buffer&, cl::LocalSpaceArg, const unsigned int>(cl::Kernel(program, "apply")));
 
     } catch (const cl::Error& error) {
         cout << "OpenCL Error: " << error.what() << "(" << error.err() << ")" << endl;
@@ -355,8 +353,8 @@ void openclBackend::run(){
     find_max_w(d_satFrobenius, d_colIndices, d_rowPointers, d_mapping, d_maxvals);
     assemble_I_J_w(d_satFrobenius, d_colIndices, d_rowPointers, d_mapping, d_maxvals, d_I, d_J);
     get_spai_w(d_I, d_J, d_satFrobenius, d_colIndices, d_rowPointers, d_mapping, d_spai);
-    //apply_w(d_J, d_spaiSolutions, d_nnzValues, d_colIndices, d_rowPointers, d_input, d_output);
+    apply_w(d_spai, d_nnzValues, d_colIndices, d_rowPointers, d_input, d_output);
 
-    read_data_from_gpu<int>(d_I, nblocks, "J_new_method");
     read_data_from_gpu<double>(d_spai, nblocks, "spai_new_method");
+    read_data_from_gpu<double>(d_output, block_size * N, "output_new_method");
 }

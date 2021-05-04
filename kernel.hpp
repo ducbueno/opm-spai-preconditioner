@@ -183,7 +183,7 @@ __kernel void get_spai(__global const unsigned int *I,
             residual[idx_t] += submat[n_valid_rows * idx_t + i] * submat[n_valid_rows * idx_t + i];
         }
 
-        normalize_residual = (residual[one_row_idx] != 0) ? residual[one_row_idx] : 1.0;
+        normalize_residual = (residual[one_row_idx] != 0) ? -residual[one_row_idx] : -1.0;
         residual[one_row_idx] = 0.0;
 
         for(unsigned int i = 0; i < n_valid_rows; i++){
@@ -219,7 +219,7 @@ __kernel void get_spai(__global const unsigned int *I,
         unsigned int p = 0;
         for(unsigned int current = first; current < last; current++){
             if(rowIndex[current] == J[current]){
-                x[current] = x0[p];
+                x[mapping[current]] = x0[p];
                 p++;
             }
         }
@@ -228,43 +228,82 @@ __kernel void get_spai(__global const unsigned int *I,
 )";
 
 const char *apply_s = R"(
-__kernel void apply(__global const unsigned int *J,
-                    __global const double *spai,
+double get_precond_val(unsigned int row,
+                       unsigned int col,
+                       unsigned int c,
+                       unsigned int r,
+                       double pval,
+                       double spai){
+    double precond = 0.0;
+
+    if(c == 0 && r == 0){
+        if(col == row){
+            precond = 1 / pval;
+        }
+    }
+    else if(c == 1 && r == 1){
+        precond = spai;
+    }
+    else if(c == 2 && r == 2){
+        precond = spai;
+    }
+
+    return precond;
+}
+
+__kernel void apply(__global const double *spai,
                     __global const double *nnzValues,
-                    __global const unsigned int *rowIndex,
-                    __global const unsigned int *colPtr,
+                    __global const unsigned int *colIndex,
+                    __global const unsigned int *rowPtr,
                     __global const double *input,
                     __global double *output,
-                    const unsigned int nmax)
+                    __local double *tmp,
+                    const unsigned int nrows)
 {
-    const unsigned int wiId = get_local_id(0);
-    const unsigned int wgId = get_group_id(0);
+    const unsigned int warpsize = 32;
+    const unsigned int idx_b = get_group_id(0);
+    const unsigned int idx_t = get_local_id(0);
+    const unsigned int idx = get_global_id(0);
     const unsigned int bs = 3;
-    double precond[3];
+    const unsigned int num_threads = get_global_size(0);
+    const unsigned int num_warps_in_grid = num_threads / warpsize;
+    const unsigned int num_active_threads = (warpsize / bs / bs) * bs * bs;
+    const unsigned int num_blocks_per_warp = warpsize / bs / bs;
+    const unsigned int lane = idx_t % warpsize;
+    const unsigned int c = (lane / bs) % bs;
+    const unsigned int r = lane % bs;
+    unsigned int target_row = idx / warpsize;
 
-    if(wiId < nmax){
-        const unsigned int j = J[wgId * nmax + wiId];
+    while(target_row < nrows){
+        unsigned int first = rowPtr[target_row];
+        unsigned int last = rowPtr[target_row + 1];
+        unsigned int block = first + lane / (bs * bs);
+        double local_out = 0.0;
 
-        if(j != -1){
-            if(j == wgId){
-                for(unsigned int i = colPtr[wgId]; i < colPtr[wgId + 1]; i++){
-                    if(rowIndex[i] == wgId){
-                        precond[0] = 1 / nnzValues[i * bs * bs]; // invp
-                        break;
-                    }
-                }
+        if(lane < num_active_threads){
+            for(; block < last; block += num_blocks_per_warp){
+                double input_elem = input[colIndex[block] * bs + c];
+                double M_elem = get_precond_val(target_row, colIndex[block], c, r, nnzValues[block * bs * bs], spai[block]);
+                local_out += M_elem * input_elem;
             }
-            else{
-                precond[0] = 0.0;
-            }
-
-            precond[1] = spai[nmax * wgId + wiId];
-            precond[2] = spai[nmax * wgId + wiId];
-
-          for(unsigned int i = 0; i < bs; i++){
-              output[j * bs + i] += precond[i] * input[j * bs + i];
-          }
         }
+
+        tmp[lane] = local_out;
+        barrier(CLK_LOCAL_MEM_FENCE);
+
+        for(unsigned int offset = 3; offset <= 24; offset <<= 1){
+            if(lane + offset < warpsize){
+                tmp[lane] += tmp[lane + offset];
+            }
+            barrier(CLK_LOCAL_MEM_FENCE);
+        }
+
+        if(lane < bs){
+            unsigned int row = target_row * bs + lane;
+            output[row] = tmp[lane];
+        }
+
+        target_row += num_warps_in_grid;
     }
 }
 )";
