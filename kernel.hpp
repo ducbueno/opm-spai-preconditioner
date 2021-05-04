@@ -138,7 +138,9 @@ __kernel void get_spai(__global const unsigned int *I,
     unsigned int row_idx, col_idx;
     unsigned int first_col_in_row, last_col_in_row, current_col_in_row;
 
-    double normalize_residual;
+    double normalize_x0 = 0.0;
+    double normalize_residual = 0.0;
+    double normalize_conjugate = 0.0;
     __local double submat[8 * 8];
     __local double residual[8];
     __local double conjugate[8];
@@ -179,31 +181,33 @@ __kernel void get_spai(__global const unsigned int *I,
         residual[idx_t] = 0.0;
         conjugate[idx_t] = 0.0;
 
+        // x0 = A(wb, :) / (A(wb, :)*A(wb, :)')
         for(unsigned int i = 0; i < n_valid_rows; i++){
-            residual[idx_t] += submat[n_valid_rows * idx_t + i] * submat[n_valid_rows * idx_t + i];
+            normalize_x0 += submat[n_valid_rows * one_row_idx + i] * submat[n_valid_rows * one_row_idx + i];
         }
+        x0[idx_t] = submat[n_valid_rows * one_row_idx + idx_t] / normalize_x0;
 
-        normalize_residual = (residual[one_row_idx] != 0) ? -residual[one_row_idx] : -1.0;
-        residual[one_row_idx] = 0.0;
+        // residual = b - A*x0
+        for(unsigned int i = 0; i < n_valid_rows; i++){
+            residual[idx_t] += submat[n_valid_rows * idx_t + i] * x0[i];
+        }
+        residual[idx_t] = (idx_t == one_row_idx) ? 0 : -residual[idx_t];
 
+        // conjugate = residual'*A*residual
         for(unsigned int i = 0; i < n_valid_rows; i++){
             conjugate[idx_t] += submat[n_valid_rows * idx_t + i] * residual[i];
         }
-
-        residual[idx_t] /= normalize_residual;
         conjugate[idx_t] *= residual[idx_t];
-        residual[idx_t] *= residual[idx_t];
 
-        for(unsigned int i = 1; i < n_valid_rows; i++){
-            residual[0] += residual[i];
-            conjugate[0] += conjugate[i];
+        for(unsigned int i = 0; i < n_valid_rows; i++){
+            normalize_residual += residual[i] * residual[i];
+            normalize_conjugate += conjugate[i];
         }
 
-        if(conjugate[0] != 0){
-            alpha = residual[0] / conjugate[0];
+        if(normalize_conjugate != 0){
+            alpha = normalize_residual / normalize_conjugate;
         }
-
-        x0[idx_t] = (submat[n_valid_rows * one_row_idx + idx_t] / normalize_residual) + alpha * residual[idx_t];
+        x0[idx_t] += alpha * residual[idx_t];
 
         for(unsigned int i = 0; i < n_valid_rows; i++){
             normalize_x += submat[n_valid_rows * one_row_idx + i] * x0[i];
@@ -220,6 +224,7 @@ __kernel void get_spai(__global const unsigned int *I,
         for(unsigned int current = first; current < last; current++){
             if(rowIndex[current] == J[current]){
                 x[mapping[current]] = x0[p];
+                //x[mapping[current]] = normalize_residual;
                 p++;
             }
         }
